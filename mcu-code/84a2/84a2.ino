@@ -1,7 +1,9 @@
 #include <RF24.h>
-//#include "Adafruit_NeoPixel.h"
 //#include "WS2812.h"
 #include "light_ws2812.c"
+//#include "Adafruit_NeoPixel.h"
+
+// SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
 
 // avrdude: safemode: Fuses OK (E:FF, H:DF, L:62) [was]
 // avrdude: safemode: Fuses OK (E:FF, H:DF, L:E2) [now]
@@ -17,17 +19,19 @@ WIRING:
 - SCK -> 9/PA4
 - MISO ? -> 7/PA6
 - WS2812 -> 2/PB0
+- IRQ -> 5/PB2
 
 //                           +-\/-+
 //                     VCC  1|    |14  GND
-//             (D  0)  PB0  2|    |13  PA0  (D 10)        AREF
+//  ws         (D  0)  PB0  2|    |13  PA0  (D 10)        AREF
 //             (D  1)  PB1  3|    |12  PA1  (D  9)
-//             (D 11)  PB3  4|    |11  PA2  (D  8)
+//  reset      (D 11)  PB3  4|    |11  PA2  (D  8)
 //  PWM  INT0  (D  2)  PB2  5|    |10  PA3  (D  7)
-//  PWM        (D  3)  PA7  6|    |9   PA4  (D  6)
-//  PWM        (D  4)  PA6  7|    |8   PA5  (D  5)        PWM
+//  PWM        (D  3)  PA7  6|    |9   PA4  (D  6)  clk
+//  PWM  mosi  (D  4)  PA6  7|    |8   PA5  (D  5)  miso  PWM
 
 ISSUE investigation:
+ - issue was address was being treated improperly, also be careful with rgb mem
  - nrf powered from 3.3 bench supply w/cap
  - mosi + sck + csn/ce + miso must be working as registers can be read
  - transmitter works as secondary nrf works
@@ -51,7 +55,7 @@ TODO:
  */
 
 #define WS_PIN 1 // 1 maps to PB0 - not sure why
-#define LEDS 2 // 24 // XXX need to actually support 24, limited by nrf rx
+#define LEDS 24 // 24 // XXX need to actually support 24, limited by nrf rx
 
 /*
 #define DOUBLE // if defined, half LED space is used and LEDs are doubled up
@@ -92,11 +96,15 @@ byte address[] = "2Node";
 
 unsigned long last = 0;
 uint32_t serial;
+#define LED_POWER_PIN 1
 
 void setup()
 {
   delay(1000);
   dbgln("starting");
+
+  pinMode(LED_POWER_PIN, OUTPUT);
+  digitalWrite(LED_POWER_PIN, HIGH); // XXX go low when wanting to turn off
 
   setupLEDs();
   /*
@@ -127,8 +135,12 @@ void setupRadio()
 {
   radio.begin();
 
+  //radio.disableCRC()
   radio.setPALevel(RF24_PA_MAX);
-  radio.setAutoAck(true); // XXX WTF - WANT THIS OFF!! but doesn't seem to work
+  radio.enableDynamicAck();
+  radio.enableDynamicPayloads();
+  radio.enableAckPayload();
+  radio.setAutoAck(false); // XXX WTF - WANT THIS OFF!! but doesn't seem to work
   radio.setAddressWidth(5);
   radio.setDataRate(RF24_250KBPS); // RF24_2MBPS
   radio.setChannel(125); // XXX
@@ -159,7 +171,7 @@ void rx()
   if (millis() - last > 1000)
     setColor(0);
 
-delay(500);
+//delay(500);
   //delay(200);
   if (radio.available())
   {
@@ -178,11 +190,10 @@ delay(500);
     // all balloons should turn this color
     if (buf[0] == '*')
     {
-  setColor(0x00ff00); delay(500); setColor(0x000000);
-      //rgb = (cRGB*)(buf + 1);
+  //setColor(0x00ff00); delay(500); setColor(0x000000);
+      //rgb = (cRGB*)(buf + 1); show();
       colorFromBuf(1);
       setColor(color);
-      show();
     }
 
     // some number of balloons turn this color if uniqid % buf[1] == buf[2]
