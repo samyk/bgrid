@@ -1,18 +1,25 @@
+/*
+TODO:
+ - add unique id
+ - figure out why ws2812s not outputting
+ */
+
 #include <RF24.h>
-//#include "WS2812.h"
 #include "light_ws2812.c"
+//#include "WS2812.h"
 //#include "Adafruit_NeoPixel.h"
 
 // SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
+
+// pinout /Users/samy/.platformio//packages/framework-arduinoavr/variants/tinyX4/pins_arduino.h
 
 // avrdude: safemode: Fuses OK (E:FF, H:DF, L:62) [was]
 // avrdude: safemode: Fuses OK (E:FF, H:DF, L:E2) [now]
 
 /*
-CSN goes LOW during SPI transfer
-CE is always HIGH
+CSN goes LOW during SPI transfer, CE is always HIGH
 
-WIRING:
+WIRING: (note miso/mosi are swapped on mcu)
 - D7 (CE) -> 10/PA3
 - D8 (CSN) -> 11/PA2
 - MOSI -> 8/PA5
@@ -32,41 +39,11 @@ WIRING:
 
 ISSUE investigation:
  - issue was address was being treated improperly, also be careful with rgb mem
- - nrf powered from 3.3 bench supply w/cap
- - mosi + sck + csn/ce + miso must be working as registers can be read
- - transmitter works as secondary nrf works
- - chip is fine as i swapped it out with working one
- - status register normally looks good (0x17FF -> 0x0E11)
- - CE good
- - MOSI good
- - MISO good
- - SCK good
- - WS good
- - CSN good
-
-DIFFERENCES:
- - teensy 10MHz, attiny 1MHz SPI - changing teensy SPI to < 1MHz doesn't fix
- - teensy 3.3v, attiny 5v - using 3.3V on attiny doesn't fix
- - 5us instead of 
-
-
-TODO:
- - add unique id
  */
 
-#define WS_PIN 1 // 1 maps to PB0 - not sure why
+//#define WS_PIN 1 // 1 maps to PB0 - not sure why
+#define WS_PIN 1 // PIN_B0
 #define LEDS 24 // 24 // XXX need to actually support 24, limited by nrf rx
-
-/*
-#define DOUBLE // if defined, half LED space is used and LEDs are doubled up
-#ifdef DOUBLE
-#define RXBYTES ((LEDS/2) * 3 + 1)
-#else
-#define RXBYTES (LEDS * 3 + 1)
-#endif
-byte buf[RXBYTES];
-*/
-//#define RXBYTES (LEDS*3 + 1)
 
 //#define RXBYTES (LEDS*3 + 1 > 32 ? 32 : LEDS*3 + 1)// 32 is MAX nRF can tx/rx
 #define RXBYTES 4
@@ -92,11 +69,10 @@ RF24 radio(7, 8); // CE, CSN
 
 //byte addresses[][6] = {"1Node","2Node"};
 byte address[] = "2Node";
-//uint64_t address = "2Node";
 
 unsigned long last = 0;
-uint32_t serial;
-#define LED_POWER_PIN 1
+uint8_t serial;
+#define LED_POWER_PIN PIN_B1 // was 1
 
 void setup()
 {
@@ -107,14 +83,9 @@ void setup()
   digitalWrite(LED_POWER_PIN, HIGH); // XXX go low when wanting to turn off
 
   setupLEDs();
-  /*
-  while (1) {
-    setColor(0x00ff00);
-    delay(1);
-  }
-  */
-  setupRadio();
   testLEDs();
+  setupRadio();
+//  while (1)/*XXX*/
 
   // don't use loop() to avoid serial stuff
   while (1) rx();
@@ -156,7 +127,8 @@ void setupLEDs()
 #if defined WS2812_H_
   LED.setOutput(WS_PIN);
 #elif defined LIGHT_WS2812_H_
-  DDRB |= _BV(WS_PIN); // _BV(ws2812_pin);
+  //DDRB |= _BV(WS_PIN); // _BV(ws2812_pin);
+  pinMode(WS_PIN, OUTPUT);
 #else
   strip.begin();
   strip.show();
@@ -187,6 +159,7 @@ void rx()
 
 
     last = millis();
+
     // all balloons should turn this color
     if (buf[0] == '*')
     {
@@ -196,7 +169,7 @@ void rx()
       setColor(color);
     }
 
-    // some number of balloons turn this color if uniqid % buf[1] == buf[2]
+    // some number of balloons turn this color if (serial % buf[1] == buf[2])
     else if (buf[0] == 'U')
     {
       if ((serial % buf[1]) == buf[2])
@@ -205,6 +178,14 @@ void rx()
         colorFromBuf(3);
         setColor(color);
       }
+    }
+
+    // get bytes based off of "serial" data
+    // 'S' [starting ID] [# of IDs] ([RGB ...] for # of IDs)
+    else if (buf[0] == 'S')
+    {
+      if (serial >= buf[1] && serial < buf[1] + buf[2])
+        colorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
     }
   }
 }
@@ -225,7 +206,6 @@ void show()
   //ws2812_sendarray((uint8_t *)rgb, LEDS*3);
   ws2812_setleds_pin(rgb, LEDS, WS_PIN);
 #else
-c
   strip.show();
 #endif
 }
