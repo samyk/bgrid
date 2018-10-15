@@ -10,6 +10,7 @@
  +
  */ 
 
+#ifndef CORE_TEENSY
 #ifndef LIGHT_WS2812_H_
 #define LIGHT_WS2812_H_
 
@@ -91,3 +92,4 @@ void ws2812_sendarray_mask(uint8_t *array,uint16_t length, uint8_t pinmask);
 #define ws2812_DDRREG   CONCAT_EXP(DDR,ws2812_port)
 
 #endif /* LIGHT_WS2812_H_ */
+#endif

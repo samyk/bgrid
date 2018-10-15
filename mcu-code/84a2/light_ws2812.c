@@ -10,6 +10,7 @@
 * License: GNU GPL v2+ (see License.txt)
 */
 
+#ifndef CORE_TEENSY
 #include "light_ws2812.h"
 #include <avr/interrupt.h>
 #include <avr/io.h>
@@ -106,6 +107,7 @@ void inline ws2812_sendarray_mask(uint8_t *data,uint16_t datlen,uint8_t maskhi)
   uint8_t sreg_prev;
   
   ws2812_DDRREG |= maskhi; // Enable output
+  // DDRB |= PIN_B0
   
   masklo	=~maskhi&ws2812_PORTREG;
   maskhi |=        ws2812_PORTREG;
@@ -179,3 +181,4 @@ w_nop16
   
   SREG=sreg_prev;
 }
+#endif

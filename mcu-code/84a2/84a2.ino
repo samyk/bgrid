@@ -4,10 +4,19 @@ TODO:
  - figure out why ws2812s not outputting
  */
 
+#if defined(__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__) || defined(__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
+#define TINY
+#endif
+
 #include <RF24.h>
+#include <EEPROM.h>
+#ifdef CORE_TEENSY
+#include "Adafruit_NeoPixel.h"
+#else
 #include "light_ws2812.c"
+#include <avr/wdt.h>
+#endif
 //#include "WS2812.h"
-//#include "Adafruit_NeoPixel.h"
 
 // SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
 
@@ -46,7 +55,7 @@ ISSUE investigation:
 #define LEDS 24 // 24 // XXX need to actually support 24, limited by nrf rx
 
 //#define RXBYTES (LEDS*3 + 1 > 32 ? 32 : LEDS*3 + 1)// 32 is MAX nRF can tx/rx
-#define RXBYTES 4
+#define RXBYTES 32
 byte buf[RXBYTES];
 
 // XXX make LEDs ramp to all 24 or whatever
@@ -61,9 +70,17 @@ struct cRGB rgb[LEDS];
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, WS_PIN, NEO_GRB + NEO_KHZ800);
 #endif
 
+#ifdef CORE_TEENSY
+#define dbg(str) Serial.print(str)
+#define dbgh(str, type) Serial.print(str, type)
+#define dbgln(str) Serial.println(str)
+#define out(x) Serial.println(x)
+#else
 #define dbg(str) void()
+#define dbgh(str, type) void()
 #define dbgln(str) void()
 #define out(x) Serial.println(x)
+#endif
 
 RF24 radio(7, 8); // CE, CSN
 
@@ -72,23 +89,37 @@ byte address[] = "2Node";
 
 unsigned long last = 0;
 uint8_t serial;
-#define LED_POWER_PIN PIN_B1 // was 1
 
 void setup()
 {
-  delay(1000);
-  dbgln("starting");
+  wdt_enable(WDTO_8S);
 
-  pinMode(LED_POWER_PIN, OUTPUT);
-  digitalWrite(LED_POWER_PIN, HIGH); // XXX go low when wanting to turn off
+#ifdef CORE_TEENSY
+  Serial.begin(115200);
+  dbgln("starting");
+#endif
 
   setupLEDs();
   testLEDs();
   setupRadio();
-//  while (1)/*XXX*/
+  getEEPROM();
 
   // don't use loop() to avoid serial stuff
   while (1) rx();
+}
+
+// EEPROM (1 byte each):
+// [magic B0] [version 00] [serial ID]
+#define EEPROM_MAGIC_ADDR   0x00
+#define EEPROM_VERSION_ADDR 0x01
+#define EEPROM_SERIAL_ADDR  0x02
+#define EEPROM_MAGIC 0xB0
+void getEEPROM()
+{
+  serial = 0;
+
+  if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC)
+    serial = EEPROM.read(EEPROM_SERIAL_ADDR);
 }
 
 void testLEDs()
@@ -135,26 +166,29 @@ void setupLEDs()
 #endif
 }
 
-#define colorFromBuf(x) unsigned long color = ((unsigned long)buf[x] << 16) | ((unsigned long)buf[x+1] << 8) | (buf[x+2]);
+#define setColorFromBuf(x) do { \
+  unsigned long color = ((unsigned long)buf[x] << 16) | ((unsigned long)buf[x+1] << 8) | (buf[x+2]); \
+  setColor(color); \
+} while(0)
+
 void loop() { }
 void rx()
 {
-// XXX readd once RF working
   if (millis() - last > 1000)
     setColor(0);
 
-//delay(500);
-  //delay(200);
   if (radio.available())
   {
-//  setColor(0x00ff00); delay(100); setColor(0x000000);
+    // get payload (how many bytes do we get?)
     while (radio.available())
     {
-  //setColor(0xff0000); delay(100); setColor(0x000000);delay(100);
-      //radio.read(&rgb, RXBYTES); // Get the payload
-      radio.read(&buf, RXBYTES); // Get the payload
-//      setPixelColor(i, buf[0]);
-//      show();
+      radio.read(&buf, RXBYTES);
+
+      wdt_reset(); // let WDT know we're good
+
+      for (int i = 0; i < RXBYTES; i++)
+        dbgh(buf[i], HEX);
+      dbgln("");
     }
 
 
@@ -162,22 +196,13 @@ void rx()
 
     // all balloons should turn this color
     if (buf[0] == '*')
-    {
-  //setColor(0x00ff00); delay(500); setColor(0x000000);
-      //rgb = (cRGB*)(buf + 1); show();
-      colorFromBuf(1);
-      setColor(color);
-    }
+      setColorFromBuf(1);
 
     // some number of balloons turn this color if (serial % buf[1] == buf[2])
     else if (buf[0] == 'U')
     {
       if ((serial % buf[1]) == buf[2])
-      {
-        //unsigned long color = ((unsigned long)buf[3] << 16) | ((unsigned long)buf[4] << 8) | (buf[5]);
-        colorFromBuf(3);
-        setColor(color);
-      }
+        setColorFromBuf(3);
     }
 
     // get bytes based off of "serial" data
@@ -185,7 +210,7 @@ void rx()
     else if (buf[0] == 'S')
     {
       if (serial >= buf[1] && serial < buf[1] + buf[2])
-        colorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
+        setColorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
     }
   }
 }
@@ -227,7 +252,6 @@ void setPixelColor(int i, unsigned long color)
 #endif
 }
 
-
 /*
 avr-g++ -o "/Users/samy/Code/balloon/mcu-code/84a2/84a2.ino.cpp" -x c++ -fpreprocessed -dD -E "/var/folders/70/8z3l03311gg8yxfmjb6dk_yc0000gn/T/tmpf6748L"
 avr-g++ -o .pioenvs/attiny44/src/84a2.ino.cpp.o -c -fno-exceptions -fno-threadsafe-statics -fpermissive -std=gnu++11 -Os -Wall -ffunction-sections -fdata-sections -flto -mmcu=attiny44 -DPLATFORMIO=30600 -DARDUINO_AVR_ATTINYX4 -DF_CPU=8000000L -DARDUINO_ARCH_AVR -DARDUINO=10805 -I. -I/Users/samy/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI -I/Users/samy/Code/arduino/libraries/RF24 -I/Users/samy/Code/arduino/libraries/RF24/utility -I/Users/samy/.platformio/packages/framework-arduinoavr/cores/tiny -I/Users/samy/.platformio/packages/framework-arduinoavr/variants/tinyX4 84a2.ino.cpp
@@ -241,3 +265,4 @@ assembly output
 avr-g++ -o blah.cpp -x c++ -fpreprocessed -dD -E 84a2.ino
 avr-g++ -S -o test2.s -c -fno-exceptions -fno-threadsafe-statics -fpermissive  -Os -Wall -ffunction-sections -fdata-sections  -mmcu=attiny44 -DPLATFORMIO=30600 -DARDUINO_AVR_ATTINYX4 -DF_CPU=8000000L -DARDUINO_ARCH_AVR -DARDUINO=10805 -I. -I/Users/samy/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI -I/Users/samy/Code/arduino/libraries/RF24 -I/Users/samy/Code/arduino/libraries/RF24/utility -I/Users/samy/.platformio/packages/framework-arduinoavr/cores/tiny -I/Users/samy/.platformio/packages/framework-arduinoavr/variants/tinyX4 blah.cpp
 */
+
