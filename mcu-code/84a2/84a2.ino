@@ -1,13 +1,21 @@
 /*
-TODO:
- - add unique id
- - figure out why ws2812s not outputting
- */
+
+write flash (erases eeprom!):
+  avrdude -P/dev/tty.usbmodemFB0001 -b19200 -v -p attiny84 -C /Users/samy/.platformio/packages/tool-avrdude/avrdude.conf -c stk500v1 -b 19200 -e -D -U flash:w:.pioenvs/attiny84/firmware.hex:i
+
+read eeprom:
+  avrdude -P/dev/tty.usbmodemFB0001 -b19200 -v -p attiny84 -C /Users/samy/.platformio/packages/tool-avrdude/avrdude.conf -c stk500v1 -b 19200 -D -U eeprom:r:eeprom.bin:r
+
+write eeprom:
+  avrdude -P/dev/tty.usbmodemFB0001 -b19200 -v -p attiny84 -C /Users/samy/.platformio/packages/tool-avrdude/avrdude.conf -c stk500v1 -b 19200 -D -U eeprom:w:testeeprom.bin:r
+
+*/
 
 #if defined(__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__) || defined(__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
 #define TINY
 #endif
 
+#define _SS_MAX_RX_BUFF 2 // RX buffer size
 #include <RF24.h>
 #include <EEPROM.h>
 #ifdef CORE_TEENSY
@@ -15,8 +23,14 @@ TODO:
 #else
 #include "light_ws2812.c"
 #include <avr/wdt.h>
+#include <SoftwareSerial.h>
 #endif
+
+//#define sp(x) Ser.write(x)
+#define sp(x)
 //#include "WS2812.h"
+
+//#define DEBUG
 
 // SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
 
@@ -54,9 +68,10 @@ ISSUE investigation:
 #define WS_PIN 1 // PIN_B0
 #define LEDS 24 // 24 // XXX need to actually support 24, limited by nrf rx
 
-//#define RXBYTES (LEDS*3 + 1 > 32 ? 32 : LEDS*3 + 1)// 32 is MAX nRF can tx/rx
-#define RXBYTES 32
-byte buf[RXBYTES];
+#define MAX_BYTES 32
+#define PKTS 3
+#define RGB_SIZE 3
+byte buf[PKTS*MAX_BYTES+1];
 
 // XXX make LEDs ramp to all 24 or whatever
 
@@ -70,87 +85,148 @@ struct cRGB rgb[LEDS];
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, WS_PIN, NEO_GRB + NEO_KHZ800);
 #endif
 
+// EEPROM (1 byte each):
+// [magic B0] [version 00] [serial ID] [flags]
+// flags (8 bits): [test LEDs]
+#define EEPROM_MAGIC_ADDR   0x00
+#define EEPROM_VERSION_ADDR 0x01
+// rewritable
+#define EEPROM_WRITABLE     0x10 // can write from here up
+#define EEPROM_SERIAL_ADDR  0x10
+#define EEPROM_FLAGS_ADDR   0x12
+#define EEPROM_FLAGS_TESTLEDS_BIT 7
+#define EEPROM_MAGIC 0xB0
+
 #ifdef CORE_TEENSY
+#define wdt_reset()
+#define wdt_enable()
+#define pf(...) printf(__VA_ARGS__)
 #define dbg(str) Serial.print(str)
 #define dbgh(str, type) Serial.print(str, type)
 #define dbgln(str) Serial.println(str)
 #define out(x) Serial.println(x)
 #else
+#define pf(...)
 #define dbg(str) void()
 #define dbgh(str, type) void()
 #define dbgln(str) void()
 #define out(x) Serial.println(x)
 #endif
 
-RF24 radio(7, 8); // CE, CSN
+#define NRF_CE 7
+#define NRF_CSN 8
+RF24 radio(NRF_CE, NRF_CSN); // CE, CSN
 
-//byte addresses[][6] = {"1Node","2Node"};
 byte address[] = "2Node";
 
 unsigned long last = 0;
+byte eeprom_set = 0;
 uint8_t serial;
+
+#define RX 3
+#define TX PIN_A0
+SoftwareSerial Ser(RX, 10);
 
 void setup()
 {
+#ifdef TINY
+  // MUST BE THE FIRST THING IN SETUP //
   wdt_enable(WDTO_8S);
+#endif
+
+  Ser.begin(9600);
 
 #ifdef CORE_TEENSY
   Serial.begin(115200);
   dbgln("starting");
 #endif
 
-  setupLEDs();
-  testLEDs();
-  setupRadio();
+
   getEEPROM();
+  wdt_reset(); // let WDT know we're good
+
+  setupLEDs();
+  wdt_reset(); // let WDT know we're good
+
+  if (!eeprom_set)
+    testLEDs(2);
+  else if (EEPROM.read(EEPROM_FLAGS_ADDR) & (1 << EEPROM_FLAGS_TESTLEDS_BIT))
+    testLEDs(3);
+  wdt_reset(); // let WDT know we're good
+
+  dbgln("pre");
+  setupRadio();
+  dbgln("post");
+  wdt_reset(); // let WDT know we're good
 
   // don't use loop() to avoid serial stuff
   while (1) rx();
 }
 
-// EEPROM (1 byte each):
-// [magic B0] [version 00] [serial ID]
-#define EEPROM_MAGIC_ADDR   0x00
-#define EEPROM_VERSION_ADDR 0x01
-#define EEPROM_SERIAL_ADDR  0x02
-#define EEPROM_MAGIC 0xB0
 void getEEPROM()
 {
   serial = 0;
 
+  // do we have valid eeprom?
   if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC)
-    serial = EEPROM.read(EEPROM_SERIAL_ADDR);
+    eeprom_set = 1;
+
+  // get 2 byte "unique" ID even if eeprom not set, this way 65535 is our ID for unset ones
+  //if (eeprom_set)
+  serial = (EEPROM.read(EEPROM_SERIAL_ADDR) << 8) | EEPROM.read(EEPROM_SERIAL_ADDR+1);
+  serial &= 0xFF; // oops, i think we only support 8 bits elsewhere
+
+  if (serial == 0x14)
+    setColor(0x0000ff);
+  else if (serial < 0x14)
+    setColor(0xff0000);
+  else if (serial > 0x14)
+    setColor(0x00ff00);
+  delay(300);
 }
 
-void testLEDs()
+void testLEDs(int nums)
 {
-  setColor(0xff0000);
-  delay(300);
-  setColor(0x00ff00);
-  delay(300);
-  setColor(0x0000ff);
-  delay(300);
+  uint32_t color = 0xFFFFFF;
+  for (int i = 0; i < nums; i++)
+  {
+    setColor(color);
+    delay(300);
+    color >>= 4;
+  }
   setColor(0x000000);
 }
 
 void setupRadio()
 {
+  dbgln("a1");
+  //radio.powerDown();
+  dbgln("a2");
+  delay(500);
+
+  dbgln("a2.0");
   radio.begin();
+  dbgln("a3");
 
   //radio.disableCRC()
+  //radio.setCRCLength(RF24_CRC_16); // XXX haven't tested
   radio.setPALevel(RF24_PA_MAX);
   radio.enableDynamicAck();
   radio.enableDynamicPayloads();
   radio.enableAckPayload();
-  radio.setAutoAck(false); // XXX WTF - WANT THIS OFF!! but doesn't seem to work
+  radio.setAutoAck(false);
   radio.setAddressWidth(5);
   radio.setDataRate(RF24_250KBPS); // RF24_2MBPS
-  radio.setChannel(125); // XXX
+  radio.setChannel(125);
 
+  dbgln("a40");
+  //address[4] = serial % 6; // XXX
   radio.openReadingPipe(1, (uint8_t*)(&address));
+  dbgln("a41");
 
   radio.startListening();
-  //radio.printDetails();
+  dbgln("a42");
+  radio.printDetails();
 }
 
 void setupLEDs()
@@ -166,56 +242,201 @@ void setupLEDs()
 #endif
 }
 
+void rx()
+{
+  // TODO fadeout (but cancel if interrupt)
+  // TODO validate interrupts work
+  if (millis() - last > 3000)
+  {
+    setColor(0);
+    last = millis();
+  }
+
+  while (radio.available())
+  {
+#ifdef DEBUG
+    setColor(0xff00); // XXX
+    delay(100);
+#endif
+
+    //radio.read(&buf, MAX_BYTES);
+    for (int i = 0; i < PKTS; i++)
+    {
+      if (radio.available())
+        radio.read((byte*)buf+i*MAX_BYTES, MAX_BYTES);
+    }
+
+#ifdef DEBUG
+    //radio.flush_rx();
+    for (int i = 0; i < MAX_BYTES*PKTS; i++)
+      sp(buf[i]);
+#endif
+
+#ifdef DEBUG
+    pf("\ngot: ");
+    for (int i = 0; i < MAX_BYTES; i++)
+      pf("%02x", buf[i]);
+    pf("\r\n");
+#endif
+
+    // valid packets?
+    if (buf[0] == '*' || buf[0] == 'U' || buf[0] == 'S' || buf[0] == '_')
+      handle_packet(); // handle packet, let WDT know we're good
+#ifdef DEBUG
+    else
+    {
+      setColor(0xffffff);
+      delay(1000);
+      setColor(0);
+      delay(300);
+    }
+#endif
+
+    // clear buf
+    memset(buf, 0, sizeof buf);
+  }
+
+#ifdef DEBUG
+  setColor(0xff0000);
+  delay(100);
+  setColor(0x00);
+  delay(100);
+#endif
+}
+
+
 #define setColorFromBuf(x) do { \
+  last = millis(); \
   unsigned long color = ((unsigned long)buf[x] << 16) | ((unsigned long)buf[x+1] << 8) | (buf[x+2]); \
   setColor(color); \
 } while(0)
 
-void loop() { }
-void rx()
+// reset our watchdog
+void handle_packet()
 {
-  if (millis() - last > 1000)
-    setColor(0);
+  wdt_reset(); // let WDT know we're good
+#ifdef DEBUG
+  setColor(0xff0000); // XXX
+  delay(500);
+  setColor(0x00); // XXX
+#endif
 
-  if (radio.available())
+  // all balloons should turn this color
+  if (buf[0] == '*')
+    setColorFromBuf(1);
+
+  // some number of balloons turn this color if (serial % buf[1] == buf[2])
+  else if (buf[0] == 'U')
   {
-    // get payload (how many bytes do we get?)
-    while (radio.available())
+    if ((serial % buf[1]) == buf[2])
+      setColorFromBuf(3);
+  }
+
+  // get bytes based off of "serial" data
+  // 'S' [starting ID] [# of IDs] ([RGB ...] for # of IDs)
+  else if (buf[0] == 'S')
+  {
+    // make sure not out of bounds
+    if (3 + 3 * buf[2] + 2 > MAX_BYTES)
+      return;
+
+    if (serial >= buf[1] && serial < buf[1] + buf[2])
     {
-      radio.read(&buf, RXBYTES);
+      // make sure not out of bounds
+      if (3 + 3 * (serial - buf[1]) + 2 > MAX_BYTES)
+        return;
 
-      wdt_reset(); // let WDT know we're good
-
-      for (int i = 0; i < RXBYTES; i++)
-        dbgh(buf[i], HEX);
-      dbgln("");
+      setColorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
     }
-
-
-    last = millis();
-
-    // all balloons should turn this color
-    if (buf[0] == '*')
-      setColorFromBuf(1);
-
-    // some number of balloons turn this color if (serial % buf[1] == buf[2])
-    else if (buf[0] == 'U')
+    else if (buf[1] == 0) // all
     {
-      if ((serial % buf[1]) == buf[2])
-        setColorFromBuf(3);
-    }
-
-    // get bytes based off of "serial" data
-    // 'S' [starting ID] [# of IDs] ([RGB ...] for # of IDs)
-    else if (buf[0] == 'S')
-    {
-      if (serial >= buf[1] && serial < buf[1] + buf[2])
-        setColorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
+      setColorFromBuf(3);
     }
   }
+
+  // set EEPROM bytes/bits without affecting neighboring bits
+  // '_' [ID to affect (2 bytes)] [# of settings (1 byte)] [bytes=1, bits=0 (1 bit), reset (1 bit), reserved (6 bits)]
+  // repeating (for # of flags): [addr (2 bytes)] [byte / bit (3 bits), on/off (1 bit), reserved (4 bits)]
+  // TODO transmit flags
+  else if (buf[0] == '_')
+  {
+#define _ID 1
+#define _NUM 3
+#define _OPTS 4
+#define _ADDR 5
+#define _DATA 7
+
+#define _DATA_LEN 3
+
+#define _OPTS_BYTE 7
+#define _OPTS_RESET 6
+
+sp("a");
+    // make sure we're working on right id
+    uint16_t id = (buf[_ID] << 8) | buf[_ID+1];
+    id &= 0xFF;
+    if (id != 0 && id != serial)
+      return;
+
+    byte numflags = buf[_NUM];
+    byte bytes = (buf[_OPTS] >> _OPTS_BYTE)  & 1;
+    byte reset = (buf[_OPTS] >> _OPTS_RESET) & 1;
+
+    // make sure not too much data
+    if (5 + numflags * _DATA_LEN > MAX_BYTES)
+      return;
+
+    // go through each addr we want to update
+    for (int i = 0; i < numflags; i++)
+    {
+      uint16_t addr = (buf[_ADDR + i * _DATA_LEN] << 8) | buf[_ADDR+1 + i * _DATA_LEN];
+      if (addr < EEPROM_WRITABLE)
+        return;
+
+      byte curbits = EEPROM.read(addr);
+      // handle writing a byte
+      if (bytes)
+      {
+        // write only if changed
+        if (curbits != buf[_DATA + i * _DATA_LEN])
+          EEPROM.write(addr, buf[_DATA + i * _DATA_LEN]);
+      }
+
+      // write single bit
+      else
+      {
+        byte bitmask = 1 << (buf[_DATA + i * _DATA_LEN] >> 5);
+        byte onoff = (buf[_DATA + i * _DATA_LEN] >> 4) & 1;
+
+        // different value, let's change it
+        if (((curbits & bitmask) > 0) != onoff)
+        {
+          // turn on
+          if (onoff)
+            curbits |= (1 << bitmask);
+          // turn off
+          else
+            curbits &= ~(1 << bitmask);
+          EEPROM.write(addr, curbits);
+        }
+      }
+    }
+
+    if (reset)
+      softReset();
+
+  } // end of _
 }
 
 
+void softReset()
+{
+#ifdef TINY
+  asm volatile ("rjmp 0");
+#endif
+}
+
+// set all LEDs to a single color
 void setColor(unsigned long color)
 {
   for (int i = 0; i < LEDS; i++)
@@ -251,6 +472,8 @@ void setPixelColor(int i, unsigned long color)
   strip.setPixelColor(i, color);
 #endif
 }
+
+void loop() { }
 
 /*
 avr-g++ -o "/Users/samy/Code/balloon/mcu-code/84a2/84a2.ino.cpp" -x c++ -fpreprocessed -dD -E "/var/folders/70/8z3l03311gg8yxfmjb6dk_yc0000gn/T/tmpf6748L"
