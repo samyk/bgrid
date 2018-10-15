@@ -38,6 +38,7 @@ void setup() {
 
   radio.begin();
   //radio.setPALevel(RF24_PA_HIGH);
+  //radio.setCRCLength(RF24_CRC_16); // XXX haven't tested
   radio.setPALevel(RF24_PA_MAX);
   radio.enableDynamicAck();
   radio.enableDynamicPayloads();
@@ -63,7 +64,7 @@ void setup() {
 
 byte mem[MAX_BYTES];
 
-#define BAD_DATA { Serial.flush(); return; }
+#define BAD_DATA do { Serial.flush(); return; } while(0)
 
 void readPix()
 {
@@ -113,7 +114,7 @@ void readPix()
   {
     outln("1,1,1,x,y,0,0,1,1,10,11,12");
   }
-  else Serial.flush();
+  //else Serial.flush();
 }
 
 void loop()
