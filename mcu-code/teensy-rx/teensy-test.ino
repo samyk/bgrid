@@ -100,8 +100,13 @@ void setupRadio()
   SPI.setClockDivider(SPI_CLOCK_DIV128);
   radio.begin();
 
-  //radio.setPALevel(RF24_PA_HIGH);
+  //radio.disableCRC()
   radio.setPALevel(RF24_PA_MAX);
+  radio.enableDynamicAck();
+  radio.enableDynamicPayloads();
+  radio.enableAckPayload();
+  radio.setAutoAck(false); // XXX WTF - WANT THIS OFF!! but doesn't seem to work
+  radio.setAddressWidth(5);
   radio.setDataRate(RF24_250KBPS); // RF24_2MBPS
   radio.setChannel(125); // XXX
 
@@ -137,14 +142,18 @@ void loop()
   //delay(200);
   if (radio.available())
   {
+  /*
   setColor(0x00ff00);
   delay(100);
   setColor(0x000000);
+  */
     while (radio.available())
     {
+    /*
   setColor(0xff0000);
   delay(100);
   setColor(0x000000);
+  */
       radio.read(&buf, RXBYTES); // Get the payload
     }
 
