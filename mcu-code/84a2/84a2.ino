@@ -118,6 +118,7 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, WS_PIN, NEO_GRB + NEO_KHZ800);
 RF24 radio(NRF_CE, NRF_CSN); // CE, CSN
 
 byte address[] = "2Node";
+byte address2[] = "2Node";// gets updated
 
 unsigned long last = 0;
 byte eeprom_set = 0;
@@ -220,8 +221,12 @@ void setupRadio()
   radio.setChannel(125);
 
   dbgln("a40");
-  //address[4] = serial % 6; // XXX
   radio.openReadingPipe(1, (uint8_t*)(&address));
+
+#define MAX_RGB_PER_PACKET 9
+  if (serial == 0xFF) serial = 0;
+  address2[0] = serial / MAX_RGB_PER_PACKET; // XXX
+  radio.openReadingPipe(2, (uint8_t*)(&address2));
   dbgln("a41");
 
   radio.startListening();
@@ -340,6 +345,7 @@ void handle_packet()
     if (3 + 3 * buf[2] + 2 > MAX_BYTES)
       return;
 
+    // is our serial number in here?
     if (serial >= buf[1] && serial < buf[1] + buf[2])
     {
       // make sure not out of bounds
@@ -348,7 +354,7 @@ void handle_packet()
 
       setColorFromBuf(3 + 3 * (serial - buf[1])); // 3 byte header + skip RGBs not relevant
     }
-    else if (buf[1] == 0) // all
+    else if (buf[1] == 0xFF) // all
     {
       setColorFromBuf(3);
     }
@@ -371,7 +377,6 @@ void handle_packet()
 #define _OPTS_BYTE 7
 #define _OPTS_RESET 6
 
-sp("a");
     // make sure we're working on right id
     uint16_t id = (buf[_ID] << 8) | buf[_ID+1];
     id &= 0xFF;
