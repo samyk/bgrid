@@ -3,6 +3,7 @@
 #include <RF24.h>
 
 #define MAX_BYTES 32
+#define MAX_SER_BYTES 0xFF
 #define RGB_SIZE 3
 //#define DEBUG
 
@@ -23,11 +24,7 @@ RF24 radio(7, 8);
 
 byte addresses[][6] = {"1Node","2Node"};
 
-#define RX 0
-#define TX 1
-
 byte multicast = 1; // turns off ack request
-bool role = TX;
 unsigned long last = 0;
 
 void setup() {
@@ -48,14 +45,8 @@ void setup() {
   radio.setDataRate(RF24_250KBPS); // RF24_2MBPS
   radio.setChannel(125); // XXX
 
-  if (role)
-  {
-    radio.openWritingPipe(addresses[1]);
-    radio.openReadingPipe(1, addresses[0]);
-  } else {
-    radio.openWritingPipe(addresses[0]);
-    radio.openReadingPipe(1, addresses[1]);
-  }
+  radio.openWritingPipe(addresses[1]);
+  radio.openReadingPipe(1, addresses[0]);
 
   // Start the radio listening for data
   //radio.startListening();
@@ -63,6 +54,7 @@ void setup() {
 }
 
 byte mem[MAX_BYTES];
+byte sermem[MAX_SER_BYTES];
 
 #define BAD_DATA do { Serial.flush(); return; } while(0)
 
@@ -71,8 +63,33 @@ void readPix()
   byte startChar = Serial.read();
 
   // XXX add timeout? how long does serial timeout take?
-  // transmit next byte (T=multicast)
-  if (startChar == 'T' || startChar == 't') // T [bytes] <bytes of data to TX>
+  // transmit next byte (uppercase=multicast)
+  if (startChar == 'A' || startChar == 'a') // A [bytes] <bytes of data to split and TX>
+  {
+    byte bytes = Serial.read();
+
+    if (bytes > MAX_SER_BYTES) BAD_DATA;
+    Serial.readBytes((char *)sermem, bytes);
+
+#define MAX_RGB_PER_PACKET 9
+#define RGB_PACKET_SIZE (MAX_RGB_PER_PACKET * RGB_SIZE)
+
+    int startid = 0;
+    for (int i = 0; i < (bytes + RGB_PACKET_SIZE - 1) / RGB_PACKET_SIZE; i++)
+    {
+      mem[0] = 'S';
+      mem[1] = startid;
+      mem[2] = MAX_RGB_PER_PACKET;
+      for (int j = 0; j < RGB_PACKET_SIZE; j++)
+        mem[3+j] = sermem[i * RGB_PACKET_SIZE + j];
+
+      addresses[1][0] = (startid) / MAX_RGB_PER_PACKET;
+      radio.openWritingPipe(addresses[1]);
+      radio.write(&mem, RGB_PACKET_SIZE+3, startChar == 'A');
+      startid += MAX_RGB_PER_PACKET;
+    }
+  }
+  else if (startChar == 'T' || startChar == 't') // T [bytes] <bytes of data to TX>
   {
     byte bytes = Serial.read();
 
