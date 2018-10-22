@@ -5,8 +5,8 @@
 #define MAX_BYTES 32
 #define MAX_SER_BYTES 0xFF
 #define RGB_SIZE 3
-#define DEBUG
 
+//#define DEBUG
 #ifdef DEBUG
 #define pf(...) printf(__VA_ARGS__)
 #else
