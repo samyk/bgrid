@@ -15,62 +15,44 @@ write eeprom:
 #define TINY
 #endif
 
-#define _SS_MAX_RX_BUFF 2 // RX buffer size
+//#define SINGLE
+
+#ifdef SINGLE
+crap
 #include <RF24Tiny.h>
+#else
+#include <RF24.h>
+#endif
 #include <EEPROM.h>
+
 #ifdef CORE_TEENSY
 #include "Adafruit_NeoPixel.h"
 #else
 #include "light_ws2812.c"
 #include <avr/wdt.h>
 #endif
+
+#ifdef SERIAL_ENABLE
+#define _SS_MAX_RX_BUFF 2 // RX buffer size
+#include <SoftwareSerial.h>
+SoftwareSerial Ser(RX, 10);
+#endif
+
 //#include "WS2812.h"
 
 //#define sp(x) Ser.write(x)
 #define sp(x)
 
-// SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
-
-// pinout /Users/samy/.platformio//packages/framework-arduinoavr/variants/tinyX4/pins_arduino.h
-
-// avrdude: safemode: Fuses OK (E:FF, H:DF, L:62) [was]
-// avrdude: safemode: Fuses OK (E:FF, H:DF, L:E2) [now]
-
-/*
-CSN goes LOW during SPI transfer, CE is always HIGH
-
-WIRING: (note miso/mosi are swapped on mcu)
-- D7 (CE) -> 10/PA3
-- D8 (CSN) -> 11/PA2
-- MOSI -> 8/PA5
-- SCK -> 9/PA4
-- MISO ? -> 7/PA6
-- WS2812 -> 2/PB0
-- IRQ -> 5/PB2
-
-//                           +-\/-+
-//                     VCC  1|    |14  GND
-//  ws         (D  0)  PB0  2|    |13  PA0  (D 10)        AREF
-//             (D  1)  PB1  3|    |12  PA1  (D  9)
-//  reset      (D 11)  PB3  4|    |11  PA2  (D  8)
-//  PWM  INT0  (D  2)  PB2  5|    |10  PA3  (D  7)
-//  PWM        (D  3)  PA7  6|    |9   PA4  (D  6)  clk
-//  PWM  mosi  (D  4)  PA6  7|    |8   PA5  (D  5)  miso  PWM
-
-ISSUE investigation:
- - issue was address was being treated improperly, also be careful with rgb mem
- */
 
 //#define WS_PIN 1 // 1 maps to PB0 - not sure why
 #define WS_PIN 1 // PIN_B0
-#define LEDS 24 // 24 // XXX need to actually support 24, limited by nrf rx
+#define LEDS 32 // 32 -- TODO, get/set from EEPROM
 
 #define MAX_BYTES 32
-#define PKTS 3
 #define RGB_SIZE 3
 byte buf[MAX_BYTES];
+int i; // reusable int
 
-#define SINGLE
 
 /*
 attiny84, no single
@@ -81,6 +63,10 @@ attiny44, no single
 DATA:    [==========]  105.5% (used 270 bytes from 256 bytes)
 PROGRAM: [==========]  113.3% (used 4640 bytes from 4096 bytes)
 Error: The program size (4640 bytes) is greater than maximum allowed (4096 bytes)
+
+attiny24, SINGLE
+DATA:    [======    ]  60.2% (used 77 bytes from 128 bytes)
+PROGRAM: [==========]  198.7% (used 4070 bytes from 2048 bytes)
 */
 
 #if defined WS2812_H_
@@ -127,22 +113,26 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, WS_PIN, NEO_GRB + NEO_KHZ800);
 
 #define NRF_CE 7
 #define NRF_CSN 8
+#ifdef SINGLE
+RF24Tiny radio; // CE, CSN
+#else
 RF24 radio(NRF_CE, NRF_CSN); // CE, CSN
+#endif
 
 byte address[] = "2Node";
 
 unsigned long last = 0;
 byte eeprom_set = 0;
-uint8_t serial;
+uint8_t serial = 0;
 
 #define RX 3
 #define TX 10
 #define DBG_PIN TX
 
 #ifdef SINGLE
-#define setColor(color) do { onergb = color; show(); } while(0)
+#define setColor(tcolor) do { onergb = tcolor; show(); } while(0)
 #else
-#define setColor(color) setColorReal(color)
+#define setColor(tcolor) setColorReal(tcolor)
 #endif
 #define setColorFromBuf(x) do { \
   last = millis(); \
@@ -151,8 +141,13 @@ uint8_t serial;
 
 void setup()
 {
+  byte mcusr = 0;
+
 #ifdef TINY
-  // MUST BE THE FIRST THING IN SETUP //
+  mcusr = MCUSR;
+  MCUSR = 0;
+
+  // MUST BE THE FIRST THING IN SETUP...works after capturing MCUSR though
   wdt_enable(WDTO_8S);
 #endif
 
@@ -165,10 +160,21 @@ void setup()
   setupLEDs();
   wdt_reset(); // let WDT know we're good
 
-  if (!eeprom_set)
-    testLEDs(2);
-  else if (EEPROM.read(EEPROM_FLAGS_ADDR) & (1 << EEPROM_FLAGS_TESTLEDS_BIT))
-    testLEDs(3);
+  // if we were NOT reset by watchdog timer
+  if (!(mcusr & _BV(WDRF)))
+  {
+    // eeprom not set
+    if (!eeprom_set)
+      testLEDs(2);
+    // "turn on leds"
+    else if (EEPROM.read(EEPROM_FLAGS_ADDR) & (1 << EEPROM_FLAGS_TESTLEDS_BIT))
+      testLEDs(1);
+    else
+      testLEDs(4);
+  }
+  // reset by watchdog, do NOTHING!
+  else { }
+
   wdt_reset(); // let WDT know we're good
 
   dbgln("pre");
@@ -192,23 +198,23 @@ void getEEPROM()
   //if (eeprom_set)
   serial = (EEPROM.read(EEPROM_SERIAL_ADDR) << 8) | EEPROM.read(EEPROM_SERIAL_ADDR+1);
   serial &= 0xFF; // oops, i think we only support 8 bits elsewhere
-
-  if (serial == 0x14)
-    setColor(0x0000ff);
-  else if (serial < 0x14)
-    setColor(0xff0000);
-  else if (serial > 0x14)
-    setColor(0x00ff00);
-  delay(300);
 }
 
-void testLEDs(int nums)
+void testLEDs(byte nums)
 {
   uint32_t color = 0xFFFFFF;
-  for (int i = 0; i < nums; i++)
+  for (i = 0; i < nums; i++)
   {
-    setColor(color);
-    delay(300);
+    //setColor(color);
+    if (i == 0)
+      setColor(0x0F0000);
+    if (i == 1)
+      setColor(0x000F00);
+    if (i == 2)
+      setColor(0x00000F);
+    if (i == 3)
+      setColor(0x0F0F0F);
+    delay(200);
     color >>= 4;
   }
   setColor(0x000000);
@@ -237,17 +243,18 @@ void setupRadio()
   radio.setChannel(125);
 
   dbgln("a40");
-  radio.openReadingPipe(1, (uint8_t*)(&address));
+  radio.openReadingPipe(1, (uint8_t*)(&address)); // XXX
 
 #define MAX_RGB_PER_PACKET 9
   if (serial == 0xFF) serial = 0;
   address[0] = serial / MAX_RGB_PER_PACKET;
-  radio.openReadingPipe(2, (uint8_t*)(&address));
+//  radio.openReadingPipe(1, (uint8_t*)(&address)); // XXX
+  radio.openReadingPipe(2, (uint8_t*)(&address)); // XXX
   dbgln("a41");
 
   radio.startListening();
   dbgln("a42");
-  radio.printDetails();
+  //radio.printDetails();
 }
 
 void setupLEDs()
@@ -330,6 +337,8 @@ void handle_packet()
   // '_' [ID to affect (2 bytes)] [# of settings (1 byte)] [bytes=1, bits=0 (1 bit), reset (1 bit), reserved (6 bits)]
   // repeating (for # of flags): [addr (2 bytes)] [byte / bit (3 bits), on/off (1 bit), reserved (4 bits)]
   // TODO transmit flags
+//#define DISABLE_EEPROM_WRITES
+#ifndef DISABLE_EEPROM_WRITES
   else if (buf[0] == '_')
   {
 #define _ID 1
@@ -358,7 +367,7 @@ void handle_packet()
       return;
 
     // go through each addr we want to update
-    for (int i = 0; i < numflags; i++)
+    for (i = 0; i < numflags; i++)
     {
       uint16_t addr = (buf[_ADDR + i * _DATA_LEN] << 8) | buf[_ADDR+1 + i * _DATA_LEN];
       if (addr < EEPROM_WRITABLE)
@@ -397,6 +406,7 @@ void handle_packet()
       softReset();
 
   } // end of _
+#endif
 }
 
 
@@ -411,7 +421,7 @@ void softReset()
 void setColorReal(unsigned long color)
 {
 //digitalWrite(DBG_PIN, HIGH);
-  for (int i = 0; i < LEDS; i++)
+  for (i = 0; i < LEDS; i++)
     setPixelColor(i, color);
   show();
 //digitalWrite(DBG_PIN, LOW);
@@ -424,7 +434,9 @@ void show()
 #elif defined LIGHT_WS2812_H_
   //ws2812_sendarray((uint8_t *)rgb, LEDS*3);
   #ifdef SINGLE
-  ws2812_setsingleleds_pin(onergb, LEDS, WS_PIN);
+ //ws2812_setsingleleds_pin(onergb, LEDS, WS_PIN);
+  ws2812_sendsingle_mask(onergb, LEDS*3, WS_PIN);
+  _delay_us(ws2812_resettime);
   #else
   ws2812_setleds_pin(rgb, LEDS, WS_PIN);
   #endif
@@ -433,24 +445,25 @@ void show()
 #endif
 }
 
-void setPixelColor(int i, unsigned long color)
+void setPixelColor(int ind, unsigned long color)
 {
 #if defined WS2812_H_
   cRGB val;
   val.r = (color >> 16) & 0xFF;
   val.g = (color >>  8) & 0xFF;
   val.b = (color >>  0) & 0xFF;
-  LED.set_crgb_at(i, val);
+  LED.set_crgb_at(ind, val);
 #elif defined LIGHT_WS2812_H_
   #ifdef SINGLE
   onergb = color;
   #else
-  rgb[i].r = (color >> 16) & 0xFF;
-  rgb[i].g = (color >>  8) & 0xFF;
-  rgb[i].b = (color >>  0) & 0xFF;
+  // can we just assign color directly?
+  rgb[ind].r = (color >> 16) & 0xFF;
+  rgb[ind].g = (color >>  8) & 0xFF;
+  rgb[ind].b = (color >>  0) & 0xFF;
   #endif
 #else
-  strip.setPixelColor(i, color);
+  strip.setPixelColor(ind, color);
 #endif
 }
 
@@ -470,3 +483,34 @@ avr-g++ -o blah.cpp -x c++ -fpreprocessed -dD -E 84a2.ino
 avr-g++ -S -o test2.s -c -fno-exceptions -fno-threadsafe-statics -fpermissive  -Os -Wall -ffunction-sections -fdata-sections  -mmcu=attiny44 -DPLATFORMIO=30600 -DARDUINO_AVR_ATTINYX4 -DF_CPU=8000000L -DARDUINO_ARCH_AVR -DARDUINO=10805 -I. -I/Users/samy/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI -I/Users/samy/Code/arduino/libraries/RF24 -I/Users/samy/Code/arduino/libraries/RF24/utility -I/Users/samy/.platformio/packages/framework-arduinoavr/cores/tiny -I/Users/samy/.platformio/packages/framework-arduinoavr/variants/tinyX4 blah.cpp
 */
 
+// SPI is defined in USICR ifdef in ~/.platformio/packages/framework-arduinoavr/libraries/__cores__/tiny/SPI/SPI.cpp
+
+// pinout /Users/samy/.platformio//packages/framework-arduinoavr/variants/tinyX4/pins_arduino.h
+
+// avrdude: safemode: Fuses OK (E:FF, H:DF, L:62) [was]
+// avrdude: safemode: Fuses OK (E:FF, H:DF, L:E2) [now]
+
+/*
+CSN goes LOW during SPI transfer, CE is always HIGH
+
+WIRING: (note miso/mosi are swapped on mcu)
+- D7 (CE) -> 10/PA3
+- D8 (CSN) -> 11/PA2
+- MOSI -> 8/PA5
+- SCK -> 9/PA4
+- MISO ? -> 7/PA6
+- WS2812 -> 2/PB0
+- IRQ -> 5/PB2
+
+//                           +-\/-+
+//                     VCC  1|    |14  GND
+//  ws         (D  0)  PB0  2|    |13  PA0  (D 10)        AREF
+//             (D  1)  PB1  3|    |12  PA1  (D  9)
+//  reset      (D 11)  PB3  4|    |11  PA2  (D  8)
+//  PWM  INT0  (D  2)  PB2  5|    |10  PA3  (D  7)
+//  PWM        (D  3)  PA7  6|    |9   PA4  (D  6)  clk
+//  PWM  mosi  (D  4)  PA6  7|    |8   PA5  (D  5)  miso  PWM
+
+ISSUE investigation:
+ - issue was address was being treated improperly, also be careful with rgb mem
+ */
