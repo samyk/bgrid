@@ -1,8 +1,9 @@
 /*
  * light weight WS2812 lib include
  *
- * Version 2.3  - Nev 29th 2015
- * Author: Tim (cpldcpu@gmail.com) 
+ * Version 2.4  - Oct 22 2018
+ * Author: Tim (cpldcpu@gmail.com)
+ * Updates: Samy Kamkar (code@samy.pl)
  *
  * Please do not change this file! All configuration is handled in "ws2812_config.h"
  *

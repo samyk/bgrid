@@ -1,9 +1,11 @@
 /*
-* light weight WS2812 lib V2.0b
+* light weight WS2812 lib V2.1
 *
 * Controls WS2811/WS2812/WS2812B RGB-LEDs
-* Author: Tim (cpldcpu@gmail.com)
+* Authors: Tim (cpldcpu@gmail.com)
+* Updates: Samy Kamkar (code@samy.pl)
 *
+* Oct 22nd, 2018  v2.1  Multi-LED, single color, low memory feature
 * Jan 18th, 2014  v2.0b Initial Version
 * Nov 29th, 2015  v2.3  Added SK6812RGBW support
 *
