@@ -1,5 +1,8 @@
 /*
 
+TODO:
+  * BUG: nrf doesn't rx if started up for first time and transmitter isn't on. this means we need to turn off power, start transmitting, then turn on power to pixels (unrelated to MCUSR)
+
 write flash (erases eeprom!):
   avrdude -P/dev/tty.usbmodemFB0001 -b19200 -v -p attiny84 -C /Users/samy/.platformio/packages/tool-avrdude/avrdude.conf -c stk500v1 -b 19200 -e -D -U flash:w:.pioenvs/attiny84/firmware.hex:i
 
@@ -16,9 +19,7 @@ write eeprom:
 #endif
 
 //#define SINGLE
-
 #ifdef SINGLE
-crap
 #include <RF24Tiny.h>
 #else
 #include <RF24.h>
@@ -32,10 +33,13 @@ crap
 #include <avr/wdt.h>
 #endif
 
+//#define SERIAL_ENABLE
 #ifdef SERIAL_ENABLE
 #define _SS_MAX_RX_BUFF 2 // RX buffer size
 #include <SoftwareSerial.h>
-SoftwareSerial Ser(RX, 10);
+#define RX 11 // we don't actually use this
+#define TX 10
+SoftwareSerial Ser(RX, TX);
 #endif
 
 //#include "WS2812.h"
@@ -165,15 +169,22 @@ void setup()
   {
     // eeprom not set
     if (!eeprom_set)
-      testLEDs(2);
+      testLEDs(4);
     // "turn on leds"
     else if (EEPROM.read(EEPROM_FLAGS_ADDR) & (1 << EEPROM_FLAGS_TESTLEDS_BIT))
       testLEDs(1);
-    else
-      testLEDs(4);
+    else { } // don't turn on LEDs!
   }
   // reset by watchdog, do NOTHING!
-  else { }
+  else
+  {
+//*
+    testLEDs(1);
+    delay(100);
+    testLEDs(1);
+    delay(100);
+//    */
+  }
 
   wdt_reset(); // let WDT know we're good
 
@@ -216,6 +227,7 @@ void testLEDs(byte nums)
       setColor(0x0F0F0F);
     delay(200);
     color >>= 4;
+    wdt_reset(); // let WDT know we're good
   }
   setColor(0x000000);
 }
@@ -280,8 +292,10 @@ void rx()
     last = millis();
   }
 
+  //setUpTo(0, 0xFF0000);
   while (radio.available())
   {
+    //setUpTo(1, 0xFF0000);
     radio.read(&buf, MAX_BYTES);
 
     // valid packets?
@@ -412,59 +426,66 @@ void handle_packet()
 
 void softReset()
 {
-#ifdef TINY
-  asm volatile ("rjmp 0");
-#endif
+  #ifdef TINY
+    asm volatile ("rjmp 0");
+  #endif
 }
 
 // set all LEDs to a single color
 void setColorReal(unsigned long color)
 {
-//digitalWrite(DBG_PIN, HIGH);
   for (i = 0; i < LEDS; i++)
     setPixelColor(i, color);
   show();
-//digitalWrite(DBG_PIN, LOW);
+}
+
+// set all LEDs up to index to a single color
+void setUpTo(int max, unsigned long color)
+{
+  for (i = max+1; i < LEDS; i++)
+    setPixelColor(i, 0);
+  for (i = 0; i <= max; i++)
+    setPixelColor(i, color);
+  show();
+  delay(100);
 }
 
 void show()
 {
-#if defined WS2812_H_
-  LED.sync();
-#elif defined LIGHT_WS2812_H_
-  //ws2812_sendarray((uint8_t *)rgb, LEDS*3);
-  #ifdef SINGLE
- //ws2812_setsingleleds_pin(onergb, LEDS, WS_PIN);
-  ws2812_sendsingle_mask(onergb, LEDS*3, WS_PIN);
-  _delay_us(ws2812_resettime);
+  #if defined WS2812_H_
+    LED.sync();
+  #elif defined LIGHT_WS2812_H_
+    #ifdef SINGLE
+      ws2812_sendsingle_mask(onergb, LEDS*3, WS_PIN);
+      _delay_us(ws2812_resettime);
+    #else
+      ws2812_setleds_pin(rgb, LEDS, WS_PIN);
+    #endif
   #else
-  ws2812_setleds_pin(rgb, LEDS, WS_PIN);
+    strip.show();
   #endif
-#else
-  strip.show();
-#endif
 }
 
 void setPixelColor(int ind, unsigned long color)
 {
-#if defined WS2812_H_
-  cRGB val;
-  val.r = (color >> 16) & 0xFF;
-  val.g = (color >>  8) & 0xFF;
-  val.b = (color >>  0) & 0xFF;
-  LED.set_crgb_at(ind, val);
-#elif defined LIGHT_WS2812_H_
-  #ifdef SINGLE
-  onergb = color;
+  #if defined WS2812_H_
+    cRGB val;
+    val.r = (color >> 16) & 0xFF;
+    val.g = (color >>  8) & 0xFF;
+    val.b = (color >>  0) & 0xFF;
+    LED.set_crgb_at(ind, val);
+  #elif defined LIGHT_WS2812_H_
+    #ifdef SINGLE
+      onergb = color;
+    #else
+      // can we just assign color directly?
+      rgb[ind].r = (color >> 16) & 0xFF;
+      rgb[ind].g = (color >>  8) & 0xFF;
+      rgb[ind].b = (color >>  0) & 0xFF;
+    #endif
   #else
-  // can we just assign color directly?
-  rgb[ind].r = (color >> 16) & 0xFF;
-  rgb[ind].g = (color >>  8) & 0xFF;
-  rgb[ind].b = (color >>  0) & 0xFF;
+    strip.setPixelColor(ind, color);
   #endif
-#else
-  strip.setPixelColor(ind, color);
-#endif
 }
 
 void loop() { }
