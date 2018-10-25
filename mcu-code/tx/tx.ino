@@ -5,8 +5,8 @@
 #define MAX_BYTES 32
 #define MAX_SER_BYTES 0xFF
 #define RGB_SIZE 3
-//#define DEBUG
 
+//#define DEBUG
 #ifdef DEBUG
 #define pf(...) printf(__VA_ARGS__)
 #else
@@ -28,8 +28,8 @@ byte multicast = 1; // turns off ack request
 unsigned long last = 0;
 
 void setup() {
+  Serial.begin(1382400);
   Serial.setTimeout(50);
-  //Serial.begin(115200);
   //while (!Serial) ; // wait for serial monitor
   delay(2000); // WNG - println's below started working after I put in this delay
 
@@ -67,9 +67,11 @@ void readPix()
   if (startChar == 'A' || startChar == 'a') // A [bytes] <bytes of data to split and TX>
   {
     byte bytes = Serial.read();
+    pf("s=%c b=%d\n", startChar, bytes);
 
     if (bytes > MAX_SER_BYTES) BAD_DATA;
-    Serial.readBytes((char *)sermem, bytes);
+    byte in = Serial.readBytes((char *)sermem, bytes);
+    pf("in=%d\n", in);
 
 #define MAX_RGB_PER_PACKET 9
 #define RGB_PACKET_SIZE (MAX_RGB_PER_PACKET * RGB_SIZE)
@@ -93,22 +95,21 @@ void readPix()
   {
     byte bytes = Serial.read();
 
-    pf("a1 %d %d ", startChar, bytes);
+    pf("s=%c b=%d\n", startChar, bytes);
     // if too big
     if (bytes > MAX_BYTES) BAD_DATA;
     byte in = Serial.readBytes((char *)mem, bytes);
-    pf("a2=%d ", in);
+    pf("in=%d\n", in);
 
     if (in != bytes) BAD_DATA;
 
-    pf("a3 %d\n", startChar == 'T');
-    pf("a4 %02x%02x%02x%02x\n", mem[0], mem[1], mem[2], mem[3]);
     radio.write(&mem, bytes, startChar == 'T');
   }
   else if (startChar == '*') // * [RGB]
   {
     mem[0] = '*';
     byte in = Serial.readBytes((char *)mem+1, RGB_SIZE);
+    pf("s=%c in=%d\n", startChar, in);
     if (in != RGB_SIZE) BAD_DATA;
 
     radio.write(&mem, 1 + RGB_SIZE, multicast);
@@ -119,10 +120,12 @@ void readPix()
     //mem[1] = Serial.read(); // id
     //mem[2] = Serial.read(); // bytes
     Serial.readBytes((char *)mem+1, 2); // read in 2 bytes (id + pixels)
+    pf("s=%c bytes=%d\n", startChar, mem[2]*RGB_SIZE+3);
 
     if (3 + mem[2]*RGB_SIZE > MAX_BYTES) BAD_DATA;
 
     byte in = Serial.readBytes((char *)mem+3, mem[2]*RGB_SIZE); // read in pixels*RGB_SIZE
+    pf("in=%d==%d\n", in, mem[2]*RGB_SIZE);
     if (in != mem[2]*RGB_SIZE) BAD_DATA;
 
     radio.write(&mem, 3 + RGB_SIZE * mem[2], multicast);
@@ -131,6 +134,9 @@ void readPix()
   {
     outln("1,1,1,x,y,0,0,1,1,10,11,12");
   }
+  else if (startChar == 255 || startChar == 0) { }
+  else
+    pf("!s=%d ", startChar);
   //else Serial.flush();
 }
 

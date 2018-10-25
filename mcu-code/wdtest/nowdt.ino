@@ -30,7 +30,6 @@ write eeprom:
 #include "Adafruit_NeoPixel.h"
 #else
 #include "light_ws2812.c"
-#include <avr/wdt.h>
 #endif
 
 //#define SERIAL_ENABLE
@@ -100,8 +99,6 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, WS_PIN, NEO_GRB + NEO_KHZ800);
 #define EEPROM_MAGIC 0xB0
 
 #ifdef CORE_TEENSY
-#define wdt_reset()
-#define wdt_enable()
 #define pf(...) printf(__VA_ARGS__)
 #define dbg(str) Serial.print(str)
 #define dbgh(str, type) Serial.print(str, type)
@@ -152,17 +149,14 @@ void setup()
   MCUSR = 0;
 
   // MUST BE THE FIRST THING IN SETUP...works after capturing MCUSR though
-  wdt_enable(WDTO_8S);
 #endif
 
   // pin D 10 -> PA0 (bit=_BV(0), port=PA(1), reg=DDRA, out=PORTA)
   //pinMode(DBG_PIN, OUTPUT);
 
   getEEPROM();
-  wdt_reset(); // let WDT know we're good
 
   setupLEDs();
-  wdt_reset(); // let WDT know we're good
 
   // if we were NOT reset by watchdog timer
   if (!(mcusr & _BV(WDRF)))
@@ -178,7 +172,7 @@ void setup()
   // reset by watchdog, do NOTHING!
   else
   {
-//*
+/*
     testLEDs(1);
     delay(100);
     testLEDs(1);
@@ -186,12 +180,10 @@ void setup()
 //    */
   }
 
-  wdt_reset(); // let WDT know we're good
 
   dbgln("pre");
   setupRadio();
   dbgln("post");
-  wdt_reset(); // let WDT know we're good
 
   // don't use loop() to avoid serial stuff
   while (1) rx();
@@ -227,7 +219,6 @@ void testLEDs(byte nums)
       setColor(0x0F0F0F);
     delay(200);
     color >>= 4;
-    wdt_reset(); // let WDT know we're good
   }
   setColor(0x000000);
 }
@@ -300,7 +291,7 @@ void rx()
 
     // valid packets?
     if (buf[0] == '*' || buf[0] == 'U' || buf[0] == 'S' || buf[0] == '_')
-      handle_packet(); // handle packet, let WDT know we're good
+      handle_packet(); // handle packet
 
     // clear buf
     memset(buf, 0, sizeof buf);
@@ -311,7 +302,6 @@ void rx()
 // reset our watchdog
 void handle_packet()
 {
-  wdt_reset(); // let WDT know we're good
 
   // all balloons should turn this color
   if (buf[0] == '*')
