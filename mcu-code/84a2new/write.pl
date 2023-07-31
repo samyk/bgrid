@@ -12,11 +12,18 @@ my $CHIP = 'attiny84';
 my $DEV = '/dev/tty.usbmodemFB0001';
 my $CONF = "/Users/samy/.platformio/packages/tool-avrdude/avrdude.conf";
 my $PROGRAMMER = "usbtiny" || "stk500v1";
-# usbtiny = avr pocket programmer?
-# stk500v1 = arduino as isp?
-my $AVRDUDE = "avrdude -v -p $CHIP -c $PROGRAMMER -e -D";
+# usbtiny = avr pocket programmer
+# stk500v1 = arduino as isp
+
+# avr pocket programmer avrdude line
+#my $AVRDUDE = "avrdude -vvv -p $CHIP -c $PROGRAMMER -e -D";
+
+# arduino programmer avrdude line
+my $AVRDUDE = "avrdude -P$DEV -b$SPEED -v -p $CHIP -C $CONF -c $PROGRAMMER -e -D";
+
+# original
 #my $AVRDUDE = "avrdude -P$DEV -b$SPEED -v -p $CHIP -C $CONF -c $PROGRAMMER -e -D";
-#my $AVRDUDE = "avrdude -P$DEV -b$SPEED -v -p $CHIP -C $CONF -c $PROGRAMMER -e -D";
+
 $LFUSE = uc($LFUSE);
 #my $FLASH = " -U flash:w:.pioenvs/attiny84/firmware.hex:i";
 my $FW = "./.pio/build/attiny84/firmware.hex" || ".pioenvs/attiny84/firmware.hex";

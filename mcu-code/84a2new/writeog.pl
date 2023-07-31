@@ -23,7 +23,8 @@ my $FW = "./.pio/build/attiny84/firmware.hex" || ".pioenvs/attiny84/firmware.hex
 my $COMPILE = "platformio run -v";
 
 my $tmpfile = "/tmp/testeeprom.bin";
-my $flags = unpack("H2", chr(0b10000000));
+#my $flags = unpack("H2", chr(0b10000000)); # test led bit = on
+my $flags = unpack("H2", chr(0b00000000)); # test led bit = off
 
 $id = unpack("H4", pack("s>", $id));
 
